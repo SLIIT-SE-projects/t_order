@@ -130,6 +130,116 @@ router.post(
 
 /**
  * @swagger
+ * /orders/checkout-preview:
+ *   post:
+ *     summary: Get a preview of the checkout order
+ *     description: Aggregates user details and product details for a checkout preview.
+ *     tags: [Orders]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [items]
+ *             properties:
+ *               items:
+ *                 type: array
+ *                 items:
+ *                   type: object
+ *                   required: [productId, quantity]
+ *                   properties:
+ *                     productId:
+ *                       type: string
+ *                     quantity:
+ *                       type: integer
+ *                       minimum: 1
+ *     responses:
+ *       200:
+ *         description: Checkout preview details
+ *       400:
+ *         description: Validation error or product not found/out of stock
+ *       401:
+ *         description: Unauthorized
+ *       503:
+ *         description: Product service unavailable
+ */
+router.post(
+  '/checkout-preview',
+  authenticate,
+  [
+    body('items').isArray({ min: 1 }).withMessage('At least one item is required'),
+    body('items.*.productId').notEmpty().withMessage('Product ID is required'),
+    body('items.*.quantity').isInt({ min: 1 }).withMessage('Quantity must be at least 1'),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
+    try {
+      const userDetails = {
+        userId: req.user.userId,
+        email: req.user.email,
+        role: req.user.role,
+      };
+
+      const resolvedItems = [];
+      let subtotal = 0;
+
+      for (const item of req.body.items) {
+        let productData;
+        try {
+          const { data } = await axios.get(`${PRODUCT_SERVICE_URL}/products/${item.productId}`, { timeout: 5000 });
+          productData = data.product;
+        } catch (err) {
+          if (err.response?.status === 404) {
+            return res.status(400).json({ error: `Product not found: ${item.productId}` });
+          }
+          console.error('Product service error:', err.message);
+          return res.status(503).json({ error: 'Product service unavailable' });
+        }
+
+        if (productData.stock < item.quantity) {
+          return res.status(400).json({ error: `Insufficient stock for product: ${productData.name}` });
+        }
+
+        const itemTotal = productData.price * item.quantity;
+        subtotal += itemTotal;
+        resolvedItems.push({
+          productId: productData._id,
+          name: productData.name,
+          price: productData.price,
+          quantity: item.quantity,
+          imageUrl: productData.imageUrl || '',
+          description: productData.description || '',
+          stock: productData.stock,
+          itemTotal,
+        });
+      }
+
+      const tax = 0; // Tax placeholder
+      const totalAmount = subtotal + tax;
+
+      res.json({
+        userDetails,
+        orderItems: resolvedItems,
+        summary: {
+          subtotal,
+          tax,
+          totalAmount,
+        },
+      });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: 'Failed to generate checkout preview' });
+    }
+  }
+);
+
+/**
+ * @swagger
  * /orders:
  *   get:
  *     summary: Get all orders for the authenticated user
