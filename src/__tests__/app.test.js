@@ -7,10 +7,27 @@ jest.mock('mongoose', () => {
 });
 
 jest.mock('../models/Order', () => {
+  const mockOrder = {
+    _id: 'ord1',
+    userId: 'user1',
+    totalAmount: 150,
+    status: 'pending',
+    items: [{ productId: 'prod1', quantity: 1 }] // Added items array to prevent iterable crash
+  };
+
   return {
-    find: jest.fn().mockReturnThis(),
-    sort: jest.fn().mockResolvedValue([{ _id: 'ord1', totalAmount: 150, status: 'pending' }]),
-    findById: jest.fn().mockResolvedValue({ _id: 'ord1', userId: 'user1', totalAmount: 150, status: 'pending' }),
+    find: jest.fn().mockReturnValue({
+      sort: jest.fn().mockReturnValue({
+        lean: jest.fn().mockResolvedValue([mockOrder]) 
+      })
+    }),
+    findById: jest.fn().mockImplementation((id) => ({
+      ...mockOrder,
+      lean: jest.fn().mockResolvedValue(mockOrder), 
+      save: jest.fn().mockResolvedValue(true)       
+    })),
+    create: jest.fn().mockResolvedValue(mockOrder),
+    countDocuments: jest.fn().mockResolvedValue(1)
   };
 });
 
@@ -21,8 +38,10 @@ jest.mock('axios', () => {
       if (url.includes('/auth/verify')) {
         return Promise.resolve({ data: { user: { userId: 'user1', role: 'customer' } } });
       }
-      return Promise.resolve({ data: {} });
+      // Product Service image fetch — return empty imageUrl so for...of loop degrades cleanly
+      return Promise.resolve({ data: { product: { imageUrl: '' } } });
     }),
+    post: jest.fn().mockResolvedValue({ data: {} }),
   };
 });
 
