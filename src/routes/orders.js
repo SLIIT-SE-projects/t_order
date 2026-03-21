@@ -252,7 +252,30 @@ router.post(
  */
 router.get('/', authenticate, async (req, res) => {
   try {
-    const orders = await Order.find({ userId: req.user.userId }).sort({ createdAt: -1 });
+    const orders = await Order.find({ userId: req.user.userId })
+      .sort({ createdAt: -1 })
+      .lean(); // plain JS objects — safe to mutate
+
+    // Enrich every item in every order with a live imageUrl from the Product Service
+    await Promise.all(
+      orders.map(async (order) => {
+        order.items = await Promise.all(
+          order.items.map(async (item) => {
+            try {
+              const { data } = await axios.get(
+                `${PRODUCT_SERVICE_URL}/products/${item.productId}`,
+                { timeout: 4000 }
+              );
+              return { ...item, imageUrl: data.product?.imageUrl || '' };
+            } catch {
+              // Product Service down, timed out, or product deleted — degrade silently
+              return { ...item, imageUrl: '' };
+            }
+          })
+        );
+      })
+    );
+
     res.json({ orders });
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch orders' });
@@ -338,11 +361,28 @@ router.get('/all', authenticate, requireAdmin, async (req, res) => {
  */
 router.get('/:id', authenticate, async (req, res) => {
   try {
-    const order = await Order.findById(req.params.id);
+    const order = await Order.findById(req.params.id).lean();
     if (!order) return res.status(404).json({ error: 'Order not found' });
     if (order.userId !== req.user.userId && req.user.role !== 'admin') {
       return res.status(403).json({ error: 'Access denied' });
     }
+
+    // Enrich each item with a live imageUrl from the Product Service
+    order.items = await Promise.all(
+      order.items.map(async (item) => {
+        try {
+          const { data } = await axios.get(
+            `${PRODUCT_SERVICE_URL}/products/${item.productId}`,
+            { timeout: 4000 }
+          );
+          return { ...item, imageUrl: data.product?.imageUrl || '' };
+        } catch {
+          // Product Service down, timed out, or product deleted — degrade silently
+          return { ...item, imageUrl: '' };
+        }
+      })
+    );
+
     res.json({ order });
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch order' });
